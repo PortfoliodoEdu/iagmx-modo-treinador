@@ -1,0 +1,36 @@
+{
+  "name": "iagmx-modo-treinador",
+  "version": "1.0.0",
+  "description": "Módulo do modo treinador IAGMX — ensino e edição da IA via WhatsApp e painel admin",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PortfoliodoEdu/iagmx-modo-treinador.git"
+  },
+  "keywords": [
+    "iagmx",
+    "treinador",
+    "whatsapp",
+    "ia",
+    "gmx"
+  ],
+  "scripts": {
+    "build": "tsc -p backend/tsconfig.json",
+    "typecheck": "tsc -p backend/tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@qdrant/js-client-rest": "1.12.0",
+    "fastify": "^5.2.1",
+    "openai": "^4.77.0",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/pg": "^8.11.10",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
