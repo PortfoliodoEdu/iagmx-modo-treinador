@@ -1,17 +1,13 @@
+/**
+ * Persistencia e entrada WhatsApp do modo treinador.
+ * CRUD de telefones/aprendizados + gate que delega ao agente ReAct.
+ * Relacionado: agent/treinador-agent.ts, treinamento-config-patches.ts.
+ */
 import pg from 'pg';
 import { config } from '../config.js';
 import { normalizarTelefone } from '../util/telefone.js';
-import { chatCompletionRaw } from './chat-providers.js';
 import { adicionarAoHistorico, obterHistorico } from './historico.js';
 import { registrarHistoricoConfiguracao } from './historico-configuracao.js';
-import {
-  aprovarPatchConfiguracao,
-  cancelarPatchConfiguracao,
-  criarPropostaPatchConfiguracao,
-  listarPatchesConfiguracaoPendentes,
-  obterUltimoPatchPendentePorTelefone,
-  reverterUltimoPatchAprovado,
-} from './treinamento-config-patches.js';
 
 const pool = new pg.Pool({ connectionString: config.databaseUrl });
 
@@ -315,11 +311,6 @@ export async function cancelarPendenciaAprendizadoWhatsapp(
   );
 }
 
-async function obterPromptBaseAtual(): Promise<string> {
-  const res = await pool.query('SELECT valor FROM configuracao WHERE chave = $1', ['prompt_sistema']);
-  return (res.rows[0]?.valor as string) || config.promptPadrao;
-}
-
 export async function obterBlocoTreinamentoWhatsapp(): Promise<string> {
   await inicializarTreinamentoWhatsapp();
   const res = await pool.query<AprendizadoWhatsapp>(
@@ -336,113 +327,10 @@ export async function obterBlocoTreinamentoWhatsapp(): Promise<string> {
     : '';
 }
 
-async function resumirInstrucaoTreinamento(texto: string): Promise<{ instrucao: string; resumo: string }> {
-  const resposta = await chatCompletionRaw(
-    [
-      {
-        role: 'system',
-        content:
-          'Voce transforma pedidos de treinamento em regras operacionais curtas para uma IA de atendimento da GMX. Responda SOMENTE JSON com {"instrucao":"...","resumo":"..."}',
-      },
-      {
-        role: 'user',
-        content: `Converta o texto abaixo em uma regra clara, objetiva e acionavel, sem perder intencao:\n\n${texto}`,
-      },
-    ],
-    { temperature: 0.2, max_tokens: 220 },
-  );
-
-  const match = resposta.match(/\{[\s\S]*\}/);
-  if (match) {
-    try {
-      const parsed = JSON.parse(match[0]) as { instrucao?: string; resumo?: string };
-      const instrucao = parsed.instrucao?.trim();
-      const resumo = parsed.resumo?.trim();
-      if (instrucao) {
-        return { instrucao, resumo: resumo || instrucao };
-      }
-    } catch {
-    }
-  }
-
-  const sane = texto.replace(/\s+/g, ' ').trim();
-  return {
-    instrucao: sane,
-    resumo: sane.slice(0, 180),
-  };
-}
-
-async function classificarIntencaoTreinamento(texto: string): Promise<'aprendizado' | 'patch' | 'pergunta' | 'normal'> {
-  const resposta = await chatCompletionRaw(
-    [
-      {
-        role: 'system',
-        content: 'Voce classifica mensagens de treinadores autorizados de uma IA de atendimento. Responda SOMENTE uma palavra: "aprendizado" se for ensinar uma nova regra/comportamento, "patch" se for editar/corrigir textos existentes, "pergunta" se for perguntar sobre como a IA funciona, ou "normal" para conversa comum.',
-      },
-      {
-        role: 'user',
-        content: texto,
-      },
-    ],
-    { temperature: 0.1, max_tokens: 20 },
-  );
-  const classificacao = resposta.toLowerCase().trim();
-  if (classificacao.includes('aprendizado') || classificacao.includes('regra') || classificacao.includes('comportamento')) return 'aprendizado';
-  if (classificacao.includes('patch') || classificacao.includes('editar') || classificacao.includes('corrigir') || classificacao.includes('substituir')) return 'patch';
-  if (classificacao.includes('pergunta') || classificacao.includes('como') || classificacao.includes('o que')) return 'pergunta';
-  return 'normal';
-}
-
-function parecePedidoDeAprendizado(texto: string): boolean {
-  return /(aprenda|aprender|adicione|inclua|grave|guarde|nova regra|regra:|treino:|a partir de agora|sempre|nunca|quando .* voce|mude seu comportamento|quero que voce|quero que use|quero que a ia|use um emoji|seja mais|responda com|fale em|nao use|nao fale)/i.test(
-    texto,
-  );
-}
-
-function parecePerguntaSobrePrompt(texto: string): boolean {
-  return /(prompt|comportamento|como voce responde|o que voce aprendeu|quais regras|resuma|explique como vai agir)/i.test(
-    texto,
-  );
-}
-
-function matchConfirmacao(texto: string): number | null {
-  const match = texto.match(/^(confirmar|aprovar)(?:\s+(?:aprendizado|regra|proposta))?(?:\s*#?\s*(\d+))?$/i);
-  if (!match) return null;
-  return match[2] ? Number(match[2]) : -1;
-}
-
-function matchCancelamento(texto: string): number | null {
-  const match = texto.match(/^(cancelar|rejeitar|descartar)(?:\s+(?:aprendizado|regra|proposta))?(?:\s*#?\s*(\d+))?$/i);
-  if (!match) return null;
-  return match[2] ? Number(match[2]) : -1;
-}
-
-function matchConfirmacaoPatch(texto: string): number | null {
-  const match = texto.match(/^(confirmar|aprovar)(?:\s+patch)?(?:\s*#?\s*(\d+))?$/i);
-  if (!match || !/patch/i.test(texto)) return null;
-  return match[2] ? Number(match[2]) : -1;
-}
-
-function matchCancelamentoPatch(texto: string): number | null {
-  const match = texto.match(/^(cancelar|rejeitar|descartar)(?:\s+patch)?(?:\s*#?\s*(\d+))?$/i);
-  if (!match || !/patch/i.test(texto)) return null;
-  return match[2] ? Number(match[2]) : -1;
-}
-
-function parecePedidoDePatch(texto: string): boolean {
-  return /(substitu|troc|corrig|reescrev|acrescent|reforc|redundan|bloco|trecho|prompt|mensagem de|mensagem do|a mensagem|orquestr|estilo|tom do|tom da|fluxo de|fluxo do|ajuste esse texto|mude esse texto|edite o|edite a)/i.test(
-    texto,
-  );
-}
-
-function pareceDesfazer(texto: string): boolean {
-  return /^(desfazer|reverter|undo|desfaz|reverte)\b/i.test(texto.trim());
-}
-
-function pareceSaudacao(texto: string): boolean {
-  return /^(ola|olá|oi|eai|e ai|opa|bom dia|boa tarde|boa noite|hello|hi)\b/i.test(texto.trim()) && texto.length < 30;
-}
-
+/**
+ * Entrada do WhatsApp no modo treinador.
+ * Delega ao agente (tools + conversa). Nao aplica patch/aprendizado automaticamente.
+ */
 export async function processarMensagemTreinamentoWhatsapp(opts: {
   telefone: string;
   remoteJid: string;
@@ -454,158 +342,18 @@ export async function processarMensagemTreinamentoWhatsapp(opts: {
   const texto = opts.textoUsuario.trim();
   await adicionarAoHistorico(opts.remoteJid, 'user', texto);
 
-  if (pareceDesfazer(texto)) {
-    try {
-      const revertido = await reverterUltimoPatchAprovado(
-        normalizarTelefone(opts.telefone),
-        opts.telefone,
-      );
-      const resposta = revertido
-        ? `Patch #${revertido.id} revertido: ${revertido.resumo}. O texto anterior foi restaurado.`
-        : 'Nao encontrei nenhum patch aprovado para reverter.';
-      await adicionarAoHistorico(opts.remoteJid, 'assistant', resposta);
-      return resposta;
-    } catch (error) {
-      const resposta = `Nao consegui reverter: ${error instanceof Error ? error.message : 'erro desconhecido'}`;
-      await adicionarAoHistorico(opts.remoteJid, 'assistant', resposta);
-      return resposta;
-    }
-  }
+  const historico = await obterHistorico(opts.remoteJid, { limite: 20 }).catch(() => []);
 
-  if (pareceSaudacao(texto)) {
-    const resposta = 'Ola. Canal de treino ativo. Mande a instrucao ou alteracao que quer aplicar.';
-    await adicionarAoHistorico(opts.remoteJid, 'assistant', resposta);
-    return resposta;
-  }
+  const { rodarAgenteTreinador } = await import('../agent/treinador-agent.js');
+  const resposta = await rodarAgenteTreinador({
+    telefone: opts.telefone,
+    remoteJid: opts.remoteJid,
+    textoUsuario: texto,
+    pushName: opts.pushName,
+    historico,
+    onReatividade: opts.onReatividade,
+  });
 
-  let intencao: 'aprendizado' | 'patch' | 'pergunta' | 'normal';
-  if (matchConfirmacao(texto) !== null || matchCancelamento(texto) !== null) {
-    intencao = 'normal';
-  } else if (matchConfirmacaoPatch(texto) !== null || matchCancelamentoPatch(texto) !== null) {
-    intencao = 'normal';
-  } else if (parecePedidoDeAprendizado(texto)) {
-    intencao = 'aprendizado';
-  } else if (parecePedidoDePatch(texto)) {
-    intencao = 'patch';
-  } else if (parecePerguntaSobrePrompt(texto)) {
-    intencao = 'pergunta';
-  } else if (/listar.*(aprendizados|regras)|quais regras|o que voce aprendeu/i.test(texto)) {
-    intencao = 'pergunta';
-  } else {
-    intencao = await classificarIntencaoTreinamento(texto);
-  }
-  
-  if (intencao === 'patch') {
-    if (opts.onReatividade) {
-      await opts.onReatividade('Entendido! 🔍 Procurando nas instrucoes atuais...');
-    }
-    try {
-      const patch = await criarPropostaPatchConfiguracao({
-        texto,
-        telefoneAutor: opts.telefone,
-        nomeAutor: opts.pushName,
-        canal: 'whatsapp',
-      });
-      await aprovarPatchConfiguracao(patch.id, normalizarTelefone(opts.telefone));
-      const resposta = `*Aplicado!* ✅ ${patch.resumo}`;
-      await adicionarAoHistorico(opts.remoteJid, 'assistant', resposta);
-      return resposta;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'falha desconhecida';
-      const detail = (message === 'A proposta veio incompleta para aplicar no treinador' || message === 'Nao consegui estruturar a proposta de patch')
-        ? 'O pedido pareceu vago ou a IA não conseguiu interpretar o alvo. Tente ser mais específico sobre o que trocar e onde.'
-        : message;
-      const resposta = `Nao consegui aplicar a mudanca: ${detail}. Pode reformular?`;
-      await adicionarAoHistorico(opts.remoteJid, 'assistant', resposta);
-      return resposta;
-    }
-  }
-
-  if (intencao === 'aprendizado') {
-    const cleaned = texto.replace(/(aprenda|aprender|adicione|inclua|grave|guarde|nova regra|regra:|treino:|a partir de agora|sempre|nunca|quando .* voce|mude seu comportamento|quero que voce)\s*/i, '').trim();
-    const alphanumericCount = cleaned.replace(/[^a-zA-Z0-9À-ÿ]/g, '').length;
-    if (alphanumericCount < 5) {
-      const resposta = 'Para criar uma nova regra, forneça uma instrução mais clara ou detalhada, com palavras reais.';
-      await adicionarAoHistorico(opts.remoteJid, 'assistant', resposta);
-      return resposta;
-    }
-
-    if (opts.onReatividade) {
-      await opts.onReatividade('Anotando! ✍️ Processando a nova regra...');
-    }
-
-    const { instrucao, resumo } = await resumirInstrucaoTreinamento(texto);
-
-    const duplicata = await pool.query<AprendizadoWhatsapp>(
-      `SELECT id FROM whatsapp_aprendizados
-       WHERE ativo = TRUE AND LOWER(TRIM(instrucao)) = LOWER(TRIM($1))
-       LIMIT 1`,
-      [instrucao],
-    );
-    if (duplicata.rowCount) {
-      const resposta = `Essa regra ja existe (ID ${duplicata.rows[0].id}). Nao preciso cadastrar de novo.`;
-      await adicionarAoHistorico(opts.remoteJid, 'assistant', resposta);
-      return resposta;
-    }
-
-    const aprendizadoRes = await pool.query<AprendizadoWhatsapp>(
-      `INSERT INTO whatsapp_aprendizados (
-        telefone_autor, nome_autor, instrucao, resumo, origem_texto, ativo, atualizado_em
-      ) VALUES ($1, $2, $3, $4, $5, TRUE, NOW())
-      RETURNING *`,
-      [
-        normalizarTelefone(opts.telefone),
-        opts.pushName?.trim() || null,
-        instrucao,
-        resumo,
-        texto,
-      ],
-    );
-    const aprendizado = aprendizadoRes.rows[0];
-    const resposta = `Regra aplicada: ${resumo || instrucao}. A IA já está usando esta nova instrução.`;
-    await adicionarAoHistorico(opts.remoteJid, 'assistant', resposta);
-    return resposta;
-  }
-
-  if (intencao === 'pergunta') {
-    const aprendizados = await listarAprendizadosWhatsapp();
-    const ativos = aprendizados.filter((item) => item.ativo).slice(0, 12);
-    const alvos = [
-      'prompt_sistema',
-      'orquestracao_texto.camadaHumana',
-      'orquestracao_texto.instrucaoFormatacao',
-      'ocr_prompt',
-      'ocr_prompt_forcado',
-      'ocr_documentos_schema',
-      'mensagens_fluxo.*',
-    ];
-    const partes: string[] = [
-      `Regras aprendidas via WhatsApp: ${ativos.length || 0}.`,
-      ativos.length
-        ? ativos.map((item, idx) => `${idx + 1}) ${item.resumo || item.instrucao}`).join(' | ')
-        : 'Nenhuma regra personalizada ativa.',
-      '',
-      `Alvos editaveis: ${alvos.join(', ')}.`,
-      'Para ensinar: "Aprenda: ..." ou "Regra: ...". Para editar: descreva o que trocar e onde.',
-    ];
-    const resposta = partes.join('\n');
-    await adicionarAoHistorico(opts.remoteJid, 'assistant', resposta);
-    return resposta;
-  }
-
-  const resposta = await chatCompletionRaw(
-    [
-      {
-        role: 'system',
-        content: 'Responda em 1 frase curta e objetiva. Nao use markdown nem listas.',
-      },
-      {
-        role: 'user',
-        content: texto,
-      },
-    ],
-    { temperature: 0.3, max_tokens: 40 },
-  );
   await adicionarAoHistorico(opts.remoteJid, 'assistant', resposta);
   return resposta;
 }

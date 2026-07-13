@@ -1,21 +1,18 @@
-# Backend — Modo Treinador
-
-Núcleo do modo treinador IAGMX.
+# Backend — Modo Treinador agentico
 
 ## Pastas
 
-- `servicos/` — lógica de negócio (WhatsApp, patches, busca)
-- `rotas/` — plugin Fastify `registrarRotasTreinamentoAdmin`
-- `integracao/` — `tentarProcessarModoTreinador` para debounce
-- `domain/` — tipos e ports de integração
+- `agent/` — ReAct, tools, escopo, estrategia de busca
+- `ports/` — contrato `chatCompletionWithTools` + host OpenAI/Claude
+- `servicos/` — motores de patch/aprendizado (nao orquestram sozinhos)
+- `rotas/` — plugin Fastify admin
+- `integracao/` — gate debounce WhatsApp
 
-## Build
+## Bootstrap no host
 
-```bash
-npm run build
+```typescript
+inicializarChatComToolsTreinador();
 ```
-
-Compila para `backend/dist/` (requer dependências do host nos imports relativos).
 
 ## Relacionado
 

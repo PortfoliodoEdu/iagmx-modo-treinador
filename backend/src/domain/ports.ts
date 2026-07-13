@@ -1,6 +1,7 @@
 /**
  * Contratos de integração do modo treinador com o host IAGMX.
  * O módulo depende destes serviços do sistema principal — não os implementa aqui.
+ * Tool calling: ver ports/chat-com-tools.ts e inicializarChatComToolsTreinador().
  */
 
 /** Chamada ao provedor de LLM (OpenAI, etc.) */
@@ -10,6 +11,9 @@ export interface PortaChatCompletion {
     opts?: { temperature?: number; max_tokens?: number },
   ) => Promise<string>;
 }
+
+/** Chat com tools — preferir ports/chat-com-tools no fluxo agentico. */
+export type { ChatWithToolsFn } from '../ports/chat-com-tools.js';
 
 /** Persistência de prompt e configurações editáveis por patch */
 export interface PortaConfiguracaoIa {
