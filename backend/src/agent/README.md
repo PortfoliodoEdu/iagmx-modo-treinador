@@ -1,14 +1,15 @@
 /**
- * Camada agentica do modo treinador: orquestracao ReAct + tools.
- * Substitui o pipeline regex/classificador por LLM com agencia.
+ * Camada agentica do modo treinador: orquestracao com politica, leitura e critica.
+ * Substitui pipeline cego por cerebro que controla busca e tipo de edicao.
  * Relacionado: servicos/treinamento-*.ts, ports/chat-com-tools.ts.
  */
 
 # Conteudo
 
 - `treinador-agent.ts` — loop ReAct
-- `treinador-system-prompt.ts` — comportamento pair-programming
-- `tool-defs.ts` — schemas das tools
-- `tool-runner.ts` — execucao nos motores de patch/busca
-- `escopo.ts` — recusa inteligente fora de escopo
-- `busca-estrategia.ts` — lexical | vetorial | hibrida | auto
+- `treinador-system-prompt.ts` — fluxo patch/overlay obrigatorio
+- `tool-defs.ts` / `tool-runner.ts` — tools incluindo ler_alvo e criticar
+- `politica-edicao.ts` — patch vs aprendizado
+- `criticar-patch.ts` — critica automatica do diff
+- `buscar-contexto.ts` — busca controlada pelo agente
+- `escopo.ts` / `busca-estrategia.ts` / `mescla-trechos.ts`

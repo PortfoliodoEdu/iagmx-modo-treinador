@@ -33,6 +33,8 @@ import {
   telefoneSeguro,
 } from './treinamento-config-patch-utils.js';
 import { recuperarTrechosTreinamento } from './treinamento-config-recuperacao.js';
+import { criticarOperacoesPatch } from '../agent/criticar-patch.js';
+import { buscarContextoTreinador } from '../agent/buscar-contexto.js';
 
 const pool = new pg.Pool({ connectionString: config.databaseUrl });
 
@@ -132,14 +134,14 @@ async function sugerirPatchPorTexto(
       {
         role: 'system',
         content:
-          'Voce e um editor tecnico da GMX. Leia os trechos relacionados e proponha um lote objetivo de ajustes. Responda SOMENTE JSON com {"operacoes":[{"alvo":"prompt_sistema|orquestracao_texto|mensagens_fluxo|ocr_prompt|ocr_prompt_forcado|ocr_documentos_schema","chave":"... ou null","operacao":"replace|append|prepend","trechoAtual":"...","textoProposto":"..."}],"resumo":"...","justificativa":"...","perguntaConfirmacao":"..."}. Use replace quando o pedido falar em trocar, corrigir ou substituir trecho. Use append para redundancia/reforco. Edite todos os trechos relevantes encontrados, mas no maximo 6 operacoes. Se o alvo for mensagens_fluxo, a chave deve ser um nome real do catalogo. Se o alvo for orquestracao_texto, a chave deve ser camadaHumana ou instrucaoFormatacao. Se o alvo for ocr_documentos_schema, a chave deve ser o id do documento (cnh, crlv, antt, endereco, foto) e o textoProposto deve ser um JSON valido do schema completo.\n\n' + catalogoAlvos,
+          'Voce e um editor tecnico SENIOR de prompts da GMX. Edite com precisao cirurgica: prefira replace LOCAL com trechoAtual fiel ao texto real. Evite replace total de prompt_sistema sem trechoAtual. Responda SOMENTE JSON com {"operacoes":[{"alvo":"prompt_sistema|orquestracao_texto|mensagens_fluxo|ocr_prompt|ocr_prompt_forcado|ocr_documentos_schema","chave":"... ou null","operacao":"replace|append|prepend","trechoAtual":"...","textoProposto":"..."}],"resumo":"...","justificativa":"...","perguntaConfirmacao":"..."}. Edite os trechos relevantes (max 6). Se mensagens_fluxo, chave real do catalogo. Se orquestracao_texto, chave camadaHumana ou instrucaoFormatacao. Se ocr_documentos_schema, chave id do documento e textoProposto JSON do schema completo.\n\n' + catalogoAlvos,
       },
       {
         role: 'user',
         content: contexto,
       },
     ],
-    { temperature: 0.15, max_tokens: 900 },
+    { temperature: 0.15, max_tokens: 1600 },
   );
   const match = resposta.match(/\{[\s\S]*\}/);
   if (!match) throw new Error('Nao consegui estruturar a proposta de patch');
@@ -173,20 +175,60 @@ export async function criarPropostaPatchConfiguracao(opts: {
   telefoneAutor?: string;
   nomeAutor?: string;
   canal?: 'whatsapp' | 'dashboard';
-}): Promise<PatchConfiguracaoPendente> {
+  /** Se o agente ja escolheu a estrategia, nao rebusca hibrido cego. */
+  modoBusca?: string;
+  queryBusca?: string;
+  limiteBusca?: number;
+}): Promise<PatchConfiguracaoPendente & { critica?: ReturnType<typeof criticarOperacoesPatch> }> {
   await inicializarTreinamentoConfigPatches();
-  const trechos = await recuperarTrechosTreinamento(opts.texto);
+
+  const query = String(opts.queryBusca || opts.texto).trim();
+  const busca = opts.modoBusca
+    ? await buscarContextoTreinador({
+        query,
+        modo: opts.modoBusca,
+        limite: opts.limiteBusca ?? 8,
+      })
+    : {
+        modoPedido: 'hibrida',
+        modoEfetivo: 'hibrida',
+        total: 0,
+        trechos: await recuperarTrechosTreinamento(opts.texto),
+      };
+
+  const trechos = busca.trechos;
   const patch = await sugerirPatchPorTexto(opts.texto, trechos);
   const previews = await simularLotePatchesTreinamento(patch.operacoes).catch((error) => {
     throw new Error(error instanceof Error ? error.message : 'Falha ao montar preview do patch');
   });
-  const respostaTreinador = montarRespostaHumanaPatch({
+
+  const critica = criticarOperacoesPatch({
+    pedido: opts.texto,
+    operacoes: patch.operacoes,
+    previews,
+  });
+
+  const justificativaComCritica = [
+    patch.justificativa || '',
+    `Busca: modo=${busca.modoEfetivo} (pedido=${busca.modoPedido}), trechos=${trechos.length}.`,
+    critica.resumo,
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  let respostaTreinador = montarRespostaHumanaPatch({
     resumo: patch.resumo,
-    justificativa: patch.justificativa,
+    justificativa: justificativaComCritica,
     perguntaConfirmacao: patch.perguntaConfirmacao,
     trechos,
     previews,
   });
+  if (!critica.aprovadoParaPerguntar) {
+    respostaTreinador +=
+      '\n\n⚠️ Critica automatica: esta proposta tem problemas. Revise antes de confirmar.\n' +
+      critica.problemas.map((p) => `- ${p}`).join('\n');
+  }
+
   const primeira = patch.operacoes[0];
   const res = await pool.query<PatchConfiguracaoPendente>(
     `INSERT INTO whatsapp_config_patches_pendentes (
@@ -206,7 +248,7 @@ export async function criarPropostaPatchConfiguracao(opts: {
       primeira.trechoAtual || null,
       primeira.textoProposto,
       patch.resumo,
-      patch.justificativa || null,
+      justificativaComCritica || null,
       patch.perguntaConfirmacao || null,
       cortar(montarResumoPreviewTexto(previews, 'antes')),
       cortar(montarResumoPreviewTexto(previews, 'depois')),
@@ -217,15 +259,14 @@ export async function criarPropostaPatchConfiguracao(opts: {
       respostaTreinador,
     ],
   );
-  const item = normalizarPatchPendente(res.rows[0]);
-  item.resposta_treinador = montarRespostaHumanaPatch({
-    id: item.id,
-    resumo: item.resumo,
-    justificativa: item.justificativa,
-    perguntaConfirmacao: item.pergunta_confirmacao,
-    trechos: item.trechos_relacionados_json,
-    previews: item.previews_json,
-  });
+  const item = normalizarPatchPendente(res.rows[0]) as PatchConfiguracaoPendente & {
+    critica?: ReturnType<typeof criticarOperacoesPatch>;
+  };
+  item.resposta_treinador = respostaTreinador.replace(
+    /Posso confirmar/,
+    item.id ? `Proposta #${item.id}. Posso confirmar` : 'Posso confirmar',
+  );
+  item.critica = critica;
   return item;
 }
 
