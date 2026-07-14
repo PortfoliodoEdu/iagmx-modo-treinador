@@ -4,10 +4,10 @@
  * Relacionado: tool-defs.ts, treinamento-config-*, treinamento-whatsapp.ts.
  */
 import { avaliarEscopoPedido } from './escopo.js';
-import { resolverModoBusca } from './busca-estrategia.js';
+import { resolverModoBusca, sanitizarLimiteBusca } from './busca-estrategia.js';
 import { buscarTrechosRelacionadosTreinamento } from '../servicos/treinamento-config-busca.js';
 import { buscarTrechosVetoriaisTreinamento } from '../servicos/treinamento-config-vetorial.js';
-import { mesclarTrechosTreinamentoParaTeste } from '../servicos/treinamento-config-recuperacao.js';
+import { mesclarTrechosTreinamento } from './mescla-trechos.js';
 import { montarResumoAlvosTreinamento } from '../servicos/treinamento-config-alvos.js';
 import {
   aprovarPatchConfiguracao,
@@ -35,19 +35,20 @@ function parseArgs(raw: string): Record<string, unknown> {
   }
 }
 
-async function buscarComModo(query: string, modo: string, limite = 8) {
+async function buscarComModo(query: string, modo: string, limite: unknown = 8) {
   const { modoEfetivo, escolhido } = resolverModoBusca(modo, query);
+  const limiteSeguro = sanitizarLimiteBusca(limite);
   let trechos;
   if (modoEfetivo === 'lexical') {
-    trechos = await buscarTrechosRelacionadosTreinamento(query, limite);
+    trechos = await buscarTrechosRelacionadosTreinamento(query, limiteSeguro);
   } else if (modoEfetivo === 'vetorial') {
-    trechos = await buscarTrechosVetoriaisTreinamento(query, limite);
+    trechos = await buscarTrechosVetoriaisTreinamento(query, limiteSeguro);
   } else {
     const [vetorial, lexical] = await Promise.all([
-      buscarTrechosVetoriaisTreinamento(query, limite).catch(() => []),
-      buscarTrechosRelacionadosTreinamento(query, limite).catch(() => []),
+      buscarTrechosVetoriaisTreinamento(query, limiteSeguro).catch(() => []),
+      buscarTrechosRelacionadosTreinamento(query, limiteSeguro).catch(() => []),
     ]);
-    trechos = mesclarTrechosTreinamentoParaTeste(vetorial, lexical, limite);
+    trechos = mesclarTrechosTreinamento(vetorial, lexical, limiteSeguro);
   }
   return {
     modoPedido: escolhido,
@@ -82,7 +83,7 @@ export async function executarToolTreinador(
       return buscarComModo(
         String(args.query || ''),
         String(args.modo || 'auto'),
-        Number(args.limite) > 0 ? Number(args.limite) : 8,
+        args.limite,
       );
 
     case 'listar_alvos':
@@ -133,31 +134,11 @@ export async function executarToolTreinador(
       return { ok: true, id, resumo: pendente.resumo, mensagem: `Patch #${id} aplicado.` };
     }
 
-    case 'cancelar_patch': {
-      const id = Number(args.id);
-      if (!Number.isFinite(id)) throw new Error('id invalido');
-      await cancelarPatchConfiguracao(id, telefone);
-      return { ok: true, id, mensagem: `Patch #${id} cancelado.` };
-    }
-
-    case 'reverter_patch': {
-      const id = Number(args.id);
-      if (Number.isFinite(id) && id > 0) {
-        await reverterPatchConfiguracao(id, telefone);
-        return { ok: true, id, mensagem: `Patch #${id} revertido.` };
-      }
-      const revertido = await reverterUltimoPatchAprovado(telefone, telefone);
-      if (!revertido) return { ok: false, mensagem: 'Nenhum patch aprovado para reverter.' };
-      return {
-        ok: true,
-        id: revertido.id,
-        mensagem: `Patch #${revertido.id} revertido: ${revertido.resumo}`,
-      };
-    }
-
     case 'propor_aprendizado': {
       const texto = String(args.texto || '').trim();
-      if (texto.length < 5) throw new Error('texto muito curto para aprendizado');
+      if (texto.length < 10) {
+        throw new Error('texto deve ter pelo menos 10 caracteres para propor aprendizado');
+      }
       const proposta = await criarPropostaTreinamentoDireto({
         texto,
         telefoneAutor: telefone,
@@ -176,7 +157,7 @@ export async function executarToolTreinador(
 
     case 'confirmar_aprendizado': {
       const id = Number(args.id);
-      if (!Number.isFinite(id)) throw new Error('id invalido');
+      if (!Number.isFinite(id) || id <= 0) throw new Error('id de aprendizado invalido');
       const item = await aprendizadoApi.aprovarPendenciaAprendizadoWhatsapp(id, telefone);
       return {
         ok: true,
@@ -188,9 +169,31 @@ export async function executarToolTreinador(
 
     case 'cancelar_aprendizado': {
       const id = Number(args.id);
-      if (!Number.isFinite(id)) throw new Error('id invalido');
+      if (!Number.isFinite(id) || id <= 0) throw new Error('id de aprendizado invalido');
       await aprendizadoApi.cancelarPendenciaAprendizadoWhatsapp(id, telefone);
       return { ok: true, id, mensagem: `Aprendizado #${id} cancelado.` };
+    }
+
+    case 'cancelar_patch': {
+      const id = Number(args.id);
+      if (!Number.isFinite(id) || id <= 0) throw new Error('id de patch invalido');
+      await cancelarPatchConfiguracao(id, telefone);
+      return { ok: true, id, mensagem: `Patch #${id} cancelado.` };
+    }
+
+    case 'reverter_patch': {
+      const id = Number(args.id);
+      if (Number.isFinite(id) && id > 0) {
+        await reverterPatchConfiguracao(id, telefone);
+        return { ok: true, id, mensagem: `Patch #${id} revertido.` };
+      }
+      const revertido = await reverterUltimoPatchAprovado(telefone, telefone);
+      if (!revertido) return { ok: false, mensagem: 'Nenhum patch aprovado para reverter.' };
+      return {
+        ok: true,
+        id: revertido.id,
+        mensagem: `Patch #${revertido.id} revertido: ${revertido.resumo}`,
+      };
     }
 
     default:

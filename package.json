@@ -19,7 +19,9 @@
   "scripts": {
     "build": "tsc -p backend/tsconfig.json",
     "typecheck": "tsc -p backend/tsconfig.json --noEmit",
-    "test:agente": "npx tsx tests/test-agente-escopo-busca.ts && npx tsx tests/test-agente-mock-escopo.ts"
+    "test:agente": "npx tsx tests/test-agente-escopo-busca.ts && npx tsx tests/test-agente-mock-escopo.ts",
+    "test:stress": "npx tsx tests/stress/stress-orquestrador.ts && npx tsx tests/stress/stress-runner-lite.ts",
+    "test:all": "npm run test:agente && npm run test:stress"
   },
   "dependencies": {
     "@qdrant/js-client-rest": "1.12.0",
