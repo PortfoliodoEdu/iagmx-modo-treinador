@@ -81,6 +81,12 @@ function normalizarPatchPendente(row: PatchConfiguracaoPendente): PatchConfigura
   };
 }
 
+export function normalizarPatchPendenteExport(
+  row: PatchConfiguracaoPendente,
+): PatchConfiguracaoPendente {
+  return normalizarPatchPendente(row);
+}
+
 export async function inicializarTreinamentoConfigPatches(): Promise<void> {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS whatsapp_config_patches_pendentes (
