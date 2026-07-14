@@ -141,6 +141,8 @@ export function registrarRotasTreinamentoAdmin(
         telefoneAutor: req.body?.telefoneAutor,
         nomeAutor: req.body?.nomeAutor,
         canal: 'dashboard',
+        modoBusca: 'auto',
+        queryBusca: texto,
       });
       if (req.body?.aplicarAgora) {
         await aprovarPatchConfiguracao(item.id, 'dashboard');

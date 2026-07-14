@@ -32,7 +32,6 @@ import {
   parseLista,
   telefoneSeguro,
 } from './treinamento-config-patch-utils.js';
-import { recuperarTrechosTreinamento } from './treinamento-config-recuperacao.js';
 import { criticarOperacoesPatch } from '../agent/criticar-patch.js';
 import { buscarContextoTreinador } from '../agent/buscar-contexto.js';
 
@@ -189,18 +188,12 @@ export async function criarPropostaPatchConfiguracao(opts: {
   await inicializarTreinamentoConfigPatches();
 
   const query = String(opts.queryBusca || opts.texto).trim();
-  const busca = opts.modoBusca
-    ? await buscarContextoTreinador({
-        query,
-        modo: opts.modoBusca,
-        limite: opts.limiteBusca ?? 8,
-      })
-    : {
-        modoPedido: 'hibrida',
-        modoEfetivo: 'hibrida',
-        total: 0,
-        trechos: await recuperarTrechosTreinamento(opts.texto),
-      };
+  // Sempre passa pelo buscar controlado (auto se omitido) — nunca rebusca hibrido cego.
+  const busca = await buscarContextoTreinador({
+    query,
+    modo: opts.modoBusca || 'auto',
+    limite: opts.limiteBusca ?? 8,
+  });
 
   const trechos = busca.trechos;
   const patch = await sugerirPatchPorTexto(opts.texto, trechos);
